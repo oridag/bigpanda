@@ -24,13 +24,13 @@ object BigPanda extends App {
 
   implicit val actorSystem = ActorSystem("system")
   implicit val ec = actorSystem.dispatcher
-  
+
   val etypeStatsActor = actorSystem.actorOf(Props[StatsActor], "etypeStatsActor")
   val dataStatsActor = actorSystem.actorOf(Props[StatsActor], "dataStatsActor")
   val parser = new Parser(etypeStatsActor, dataStatsActor)
   val server = new Server(etypeStatsActor, dataStatsActor)
   val p = Process("./generator-linux-amd64") run ProcessLogger({ line => parser.handleLine(line) }, { line => println("stderr: " + line) })
-  
+
   println("running...")
   server.run()
   StdIn.readLine()
@@ -40,13 +40,14 @@ object BigPanda extends App {
 }
 
 class Parser(etypeStatsActor: ActorRef, dataStatsActor: ActorRef)(implicit ex: ExecutionContext) {
-  
+
   def handleLine(line: String) = {
     val parsed = Future { parse(line) }
-    parsed.onSuccess({ case event: Event => 
-      etypeStatsActor ! Increment(event.etype) 
-      dataStatsActor ! Increment(event.data)
-        })
+    parsed.onSuccess({
+      case event: Event =>
+        etypeStatsActor ! Increment(event.etype)
+        dataStatsActor ! Increment(event.data)
+    })
     parsed.onFailure({ case t => println(t) })
   }
 
@@ -57,26 +58,26 @@ class Parser(etypeStatsActor: ActorRef, dataStatsActor: ActorRef)(implicit ex: E
         val etype = m.getOrElse("event_type", { throw new ParseFailedExcpetion("event_type not found") }) match {
           case s: String => s
           case _         => throw new ParseFailedExcpetion("event_type is not a string")
-                }
+        }
         val data = m.getOrElse("data", { throw new ParseFailedExcpetion("data not found") }) match {
           case s: String => s
           case _         => throw new ParseFailedExcpetion("data is not a string")
-                }
-        Event(etype, data)
-            }
-      case _ => throw new ParseFailedExcpetion("event is not a JSON object")
         }
+        Event(etype, data)
+      }
+      case _ => throw new ParseFailedExcpetion("event is not a JSON object")
     }
+  }
 }
 
 class StatsActor extends Actor {
-  
+
   var stats: Map[String, Long] = Map[String, Long]().withDefaultValue(0)
-  
+
   def receive = {
-    case Increment(key) => updateStats(key)
-    case EventQuery(None) => sender() ! stats 
-    case EventQuery(Some(key)) => sender() ! stats(key) 
+    case Increment(key)        => updateStats(key)
+    case EventQuery(None)      => sender() ! stats
+    case EventQuery(Some(key)) => sender() ! stats(key)
   }
 
   def updateStats(key: String) = {
@@ -93,22 +94,22 @@ class Server(etypeStatsActor: ActorRef, dataStatsActor: ActorRef)(implicit ec: E
       pathEndOrSingleSlash {
         val statsFuture = (actor ? EventQuery(Some(key))).mapTo[Long]
         onSuccess(statsFuture) { stats => complete(HttpEntity(ContentTypes.`text/plain(UTF-8)`, stats.toString + "\n")) }
-        }
-      } ~
-   pathEndOrSingleSlash {
+      }
+    } ~
+      pathEndOrSingleSlash {
         val statsFuture = (actor ? EventQuery(None)).mapTo[Map[String, Long]]
         onSuccess(statsFuture) { stats => complete(HttpEntity(ContentTypes.`text/plain(UTF-8)`, stats.mkString("\n") + "\n")) }
       }
   }
-  
+
   val route =
     get {
       pathPrefix("event-type") {
         statTypeRoute(etypeStatsActor)
-            } ~
-      pathPrefix("data") {
-        statTypeRoute(dataStatsActor)
-            }
+      } ~
+        pathPrefix("data") {
+          statTypeRoute(dataStatsActor)
+        }
     }
 
   def run() = {
